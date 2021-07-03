@@ -97,18 +97,19 @@
   (print "Putting metric:")
   (pp s))
 
-(let [cache (cachetools.LRUCache :maxsize 4096)
-      boto-session (boto3.session.Session)
-      temp-creds (-> boto-session .get_credentials .get_frozen_credentials)
-      ecs-client (.client boto-session "ecs")
-      cw-client (.client boto-session "cloudwatch")
-      docker-client (docker.from_env)
-      cluster-arn "arn:aws:ecs:us-east-2:875565619567:cluster/ban-nonprod"
-      container-inst-id (discover-container-instance-arn cache docker-client ecs-client cluster-arn)]
-  (while True
-    (for [s (->> (get-valid-stats cache docker-client ecs-client cluster-arn container-inst-id))]
-      (put-metric cw-client s))
-    (nap)))
+(let [temp-creds (-> boto-session .get_credentials .get_frozen_credentials)]
+  (pp temp-creds)
+  (let [cache (cachetools.LRUCache :maxsize 4096)
+        boto-session (boto3.session.Session)
+        ecs-client (.client boto-session "ecs")
+        cw-client (.client boto-session "cloudwatch")
+        docker-client (docker.from_env)
+        cluster-arn "arn:aws:ecs:us-east-2:875565619567:cluster/ban-nonprod"
+        container-inst-id (discover-container-instance-arn cache docker-client ecs-client cluster-arn)]
+    (while True
+      (for [s (->> (get-valid-stats cache docker-client ecs-client cluster-arn container-inst-id))]
+        (put-metric cw-client s))
+      (nap))))
 
 #_(let [client (docker.from_env)]
   (while True
