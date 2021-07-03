@@ -99,6 +99,7 @@
 
 (let [cache (cachetools.LRUCache :maxsize 4096)
       boto-session (boto3.session.Session)
+      temp-creds (-> boto-session .get_credentials .get_frozen_credentials)
       ecs-client (.client boto-session "ecs")
       cw-client (.client boto-session "cloudwatch")
       docker-client (docker.from_env)
