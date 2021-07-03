@@ -8,13 +8,11 @@
         docker.models.containers)
 (import [util [chunks merge]])
 
-#_(import yaml)
-
 (defn nap [&optional [seconds 30]]
   (print "Sleeping" seconds "seconds")
   (time.sleep seconds))
 
-#_(defn get-mem-usages [client]
+(defn get-mem-usages [client]
   (->> (client.containers.list)
        (map (partial docker.models.containers.Container.stats :stream False))
        (map (fn [s] {:id (get s "id")
@@ -22,8 +20,8 @@
                      :mem_usage (get s "memory_stats" "usage")}))
        list))
 
-(setv RUNTIME-ID "40b2cf8b1a76358d3ae6210b1050d249ca2b28cf0152afc57a97097514664a5f")
-(defn get-mem-usages [client]
+#_(setv RUNTIME-ID "40b2cf8b1a76358d3ae6210b1050d249ca2b28cf0152afc57a97097514664a5f")
+#_(defn get-mem-usages [client]
   [{:id "bad" #_RUNTIME-ID
     :time "2021-07-03T14:26:23.123123"
     :mem_usage 14876672}
@@ -99,7 +97,7 @@
 
 (let [boto-session (boto3.session.Session)
       temp-creds (-> boto-session .get_credentials .get_frozen_credentials)]
-  (pp temp-creds)
+  #_(pp temp-creds)
   (let [cache (cachetools.LRUCache :maxsize 4096)
         ecs-client (.client boto-session "ecs")
         cw-client (.client boto-session "cloudwatch")
