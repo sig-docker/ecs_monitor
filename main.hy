@@ -98,8 +98,9 @@
   (pp s))
 
 (let [cache (cachetools.LRUCache :maxsize 4096)
-      ecs-client (boto3.client "ecs")
-      cw-client (boto3.client "cloudwatch")
+      boto-session (boto3.session.Session)
+      ecs-client (.client boto-session "ecs")
+      cw-client (.client boto-session "cloudwatch")
       docker-client (docker.from_env)
       cluster-arn "arn:aws:ecs:us-east-2:875565619567:cluster/ban-nonprod"
       container-inst-id (discover-container-instance-arn cache docker-client ecs-client cluster-arn)]
