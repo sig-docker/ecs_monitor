@@ -19,7 +19,8 @@ Resources:
         - Image: sigcorp/ecs_monitor:0.1.7
           Name: main
           Hostname: !Ref AWS::StackName
-          Memory: 64
+          Memory: 128
+          MemoryReservation: 64
           Environment:
             # You wouldn't think this would be necessary, but apparently it is.
             - Name: AWS_DEFAULT_REGION
