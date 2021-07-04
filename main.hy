@@ -1,5 +1,5 @@
 (require [hy.contrib.walk [let]])
-(import [datetime [datetime]]
+(import dateutil.parser
         [functools [partial]]
         [hy.contrib.pprint [pp]]
         [os [environ]]
@@ -100,7 +100,7 @@
         (assoc cache (:id s) {}))))
 
 (defn parse-time [s]
-  (datetime.fromisoformat s))
+  (dateutil.parser.isoparse s))
 
 (defn to-metric-data [cluster-name s]
   {"MetricName" "MemoryUsage"
