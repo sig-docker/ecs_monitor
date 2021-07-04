@@ -102,19 +102,18 @@
 (defn parse-time [s]
   (datetime.fromisoformat s))
 
-(defn put-metric [cluster-name client s]
-  (pp s)
-  (let [metric-data {"MetricName" "MemoryUsage"
-                     "Dimensions" [{"Name" "ClusterName" "Value" cluster-name}
-                                   {"Name" "Group" "Value" (:group s)}
-                                   {"Name" "ContainerName" "Value" (:container-name s)}]
-                     "Timestamp" (parse-time (:time s))
-                     "Value" (:mem-usage s)
-                     "Unit" "Bytes"}]
-    (pp metric-data)
-    ;; TODO: Split this into two functions. One to create the metric data structure and another to send it.
-    ;;       we can then send the data in chunks to reduce API calls.
-    (.put_metric_data client :Namespace "ECS/Monitor" :MetricData [metric-data])))
+(defn to-metric-data [cluster-name s]
+  {"MetricName" "MemoryUsage"
+   "Dimensions" [{"Name" "ClusterName" "Value" cluster-name}
+                 {"Name" "Group" "Value" (:group s)}
+                 {"Name" "ContainerName" "Value" (:container-name s)}]
+   "Timestamp" (parse-time (:time s))
+   "Value" (:mem-usage s)
+   "Unit" "Bytes"})
+
+(defn put-metrics [client metrics]
+  (pp metrics)
+  (.put_metric_data client :Namespace "ECS/Monitor" :MetricData metrics))
 
 (defn get-cluster-name [arn]
   (print "Fetching name of cluster" arn)
@@ -127,12 +126,17 @@
     (print "cluster-name:" cluster-name)
     cluster-name))
 
+(defn apply-in-chunks [chunk-size f it]
+  (for [chunk (chunks it chunk-size)]
+    (f chunk)))
+
 (defn run-once [cache docker-client cluster-arn cluster-name container-inst-id]
   (let [boto-session (boto3.session.Session)
         ecs-client (.client boto-session "ecs")
         cw-client (.client boto-session "cloudwatch")]
-    (for [s (->> (get-valid-stats cache docker-client ecs-client cluster-arn container-inst-id))]
-        (put-metric cluster-name cw-client s))))
+    (->> (get-valid-stats cache docker-client ecs-client cluster-arn container-inst-id)
+         (map (partial to-metric-data cluster-name))
+         (apply-in-chunks 20 (partial put-metrics cw-client)))))
 
 (defn main-loop [cluster-arn]
   (let [cache (cachetools.LRUCache :maxsize 4096)
