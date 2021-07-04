@@ -112,7 +112,7 @@
    "Unit" "Bytes"})
 
 (defn put-metrics [client metrics]
-  (pp metrics)
+  #_(pp metrics)
   (.put_metric_data client :Namespace "ECS/Monitor" :MetricData metrics))
 
 (defn get-cluster-name [arn]
