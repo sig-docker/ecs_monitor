@@ -1,6 +1,8 @@
 (require [hy.contrib.walk [let]])
-(import [functools [partial]]
+(import [datetime [datetime]]
+        [functools [partial]]
         [hy.contrib.pprint [pp]]
+        [os [environ]]
         time)
 (import boto3
         cachetools
@@ -8,26 +10,30 @@
         docker.models.containers)
 (import [util [chunks merge]])
 
-(defn nap [&optional [seconds 30]]
+(defn nap [&optional [seconds 300]]
   (print "Sleeping" seconds "seconds")
   (time.sleep seconds))
 
-(defn get-mem-usages [client]
+(defn boto-client [name]
+  (-> (boto3.session.Session)
+      (.client name)))
+
+#_(defn get-mem-usages [client]
   (->> (client.containers.list)
        (map (partial docker.models.containers.Container.stats :stream False))
        (map (fn [s] {:id (get s "id")
                      :time (get s "read")
-                     :mem_usage (get s "memory_stats" "usage")}))
+                     :mem-usage (get s "memory_stats" "usage")}))
        list))
 
-#_(setv RUNTIME-ID "40b2cf8b1a76358d3ae6210b1050d249ca2b28cf0152afc57a97097514664a5f")
-#_(defn get-mem-usages [client]
+(setv RUNTIME-ID "40b2cf8b1a76358d3ae6210b1050d249ca2b28cf0152afc57a97097514664a5f")
+(defn get-mem-usages [client]
   [{:id "bad" #_RUNTIME-ID
     :time "2021-07-03T14:26:23.123123"
-    :mem_usage 14876672}
+    :mem-usage 14876672}
    {:id RUNTIME-ID
     :time "2021-07-03T14:26:23.123123"
-    :mem_usage 14876672}])
+    :mem-usage 14876672}])
 
 (defn get-task-arns [client cluster-arn &optional container-inst-arn]
   (let [pager (client.get_paginator "list_tasks")]
@@ -59,19 +65,21 @@
   (for [container (get-containers client cluster-arn container-inst-arn)]
     (assoc cache (:runtime-id container) container)))
 
-(defn discover-container-instance-arn [cache docker-client ecs-client cluster-arn]
-  (while True
-    (print "Attempting to determine which container instance I'm running on...")
-    (update-cache cache ecs-client cluster-arn)
-    (let [ret (->> (get-mem-usages docker-client)
-                   (map ':id)
-                   (map (fn [s] (.get cache s)))
-                   (drop-while none?)
-                   (map ':container-instance-arn)
-                   first)]
-      (if ret (return ret)))
-    (print "Unable to determine my container instance ID.")
-    (nap)))
+(defn discover-container-instance-arn [cache docker-client cluster-arn]
+  (let [ecs-client (boto-client "ecs")]
+    (while True
+      (print "Attempting to determine which container instance I'm running on...")
+
+      (update-cache cache ecs-client cluster-arn)
+      (let [ret (->> (get-mem-usages docker-client)
+                     (map ':id)
+                     (map (fn [s] (.get cache s)))
+                     (drop-while none?)
+                     (map ':container-instance-arn)
+                     first)]
+        (if ret (return ret)))
+      (print "Unable to determine my container instance ID.")
+      (nap))))
 
 (defn get-container-stats [cache docker-client ecs-client cluster-arn container-inst-arn &optional no-refresh]
   (let [first-pass (->> (get-mem-usages docker-client)
@@ -91,25 +99,50 @@
     (if (in :group s) (yield s)
         (assoc cache (:id s) {}))))
 
-(defn put-metric [client s]
-  (print "Putting metric:")
-  (pp s))
+(defn parse-time [s]
+  (datetime.fromisoformat s))
 
-(let [boto-session (boto3.session.Session)
-      temp-creds (-> boto-session .get_credentials .get_frozen_credentials)]
-  #_(pp temp-creds)
-  (let [cache (cachetools.LRUCache :maxsize 4096)
+(defn put-metric [cluster-name client s]
+  (pp s)
+  (let [metric-data {"MetricName" "MemoryUsage"
+                     "Dimensions" [{"Name" "ClusterName" "Value" cluster-name}
+                                   {"Name" "Group" "Value" (:group s)}
+                                   {"Name" "ContainerName" "Value" (:container-name s)}]
+                     "Timestamp" (parse-time (:time s))
+                     "Value" (:mem-usage s)
+                     "Unit" "Bytes"}]
+    (pp metric-data)
+    ;; TODO: Split this into two functions. One to create the metric data structure and another to send it.
+    ;;       we can then send the data in chunks to reduce API calls.
+    (.put_metric_data client :Namespace "ECS/Monitor" :MetricData [metric-data])))
+
+(defn get-cluster-name [arn]
+  (print "Fetching name of cluster" arn)
+  (let [cluster-name
+        (-> (boto-client "ecs")
+            (.describe_clusters :clusters [arn])
+            (.get "clusters")
+            first
+            (.get "clusterName"))]
+    (print "cluster-name:" cluster-name)
+    cluster-name))
+
+(defn run-once [cache docker-client cluster-arn cluster-name container-inst-id]
+  (let [boto-session (boto3.session.Session)
         ecs-client (.client boto-session "ecs")
-        cw-client (.client boto-session "cloudwatch")
+        cw-client (.client boto-session "cloudwatch")]
+    (for [s (->> (get-valid-stats cache docker-client ecs-client cluster-arn container-inst-id))]
+        (put-metric cluster-name cw-client s))))
+
+(defn main-loop [cluster-arn]
+  (let [cache (cachetools.LRUCache :maxsize 4096)
+        cluster-name (get-cluster-name cluster-arn)
         docker-client (docker.from_env)
-        cluster-arn "arn:aws:ecs:us-east-2:875565619567:cluster/ban-nonprod"
-        container-inst-id (discover-container-instance-arn cache docker-client ecs-client cluster-arn)]
+        container-inst-id (discover-container-instance-arn cache docker-client cluster-arn)]
     (while True
-      (for [s (->> (get-valid-stats cache docker-client ecs-client cluster-arn container-inst-id))]
-        (put-metric cw-client s))
+      (run-once cache docker-client cluster-arn cluster-name container-inst-id)
       (nap))))
 
-#_(let [client (docker.from_env)]
-  (while True
-    (pp (get-mem-usages client))
-    (time.sleep 30)))
+(let [cluster-arn (.get environ "CLUSTER_ARN")]
+  (if cluster-arn (main-loop cluster-arn)
+      (raise (Exception "Missing required environment variable: CLUSTER_ARN"))))
