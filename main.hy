@@ -63,7 +63,8 @@
 (defn update-cache [cache client cluster-arn &optional container-inst-arn]
   (print "Updating container cache...")
   (for [container (get-containers client cluster-arn container-inst-arn)]
-    (assoc cache (:runtime-id container) container)))
+    (assoc cache (:runtime-id container) container))
+  (print "Cache size:" cache.currsize "/" cache.maxsize))
 
 (defn discover-container-instance-arn [cache docker-client cluster-arn]
   (let [ecs-client (boto-client "ecs")]
