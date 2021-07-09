@@ -1,7 +1,7 @@
 (require [hy.contrib.walk [let]])
 (import dateutil.parser
         [functools [partial]]
-        [hy.contrib.pprint [pp]]
+        [hy.contrib.pprint [pp pformat]]
         [os [environ]]
         time)
 (import boto3
@@ -10,15 +10,26 @@
         docker.models.containers)
 (import [util [chunks merge]])
 
+(setv DEBUG (.get environ "ECS_MONITOR_DEBUG"))
+
+(defn log [&rest args]
+  (let [parts (->> args
+                   (map (fn [a] (if (string? a) a (pformat a))))
+                   list)]
+    (print (unpack-iterable parts))))
+
+(defn debug [&rest args]
+  (when DEBUG (log #* args)))
+
 (defn nap [&optional [seconds 300]]
-  (print "Sleeping" seconds "seconds")
+  (debug "Sleeping" seconds "seconds")
   (time.sleep seconds))
 
 (defn boto-client [name]
   (-> (boto3.session.Session)
       (.client name)))
 
-(defn get-mem-usages [client]
+(defn get-mem-usages-real [client]
   (->> (client.containers.list)
        (map (partial docker.models.containers.Container.stats :stream False))
        (map (fn [s] {:id (get s "id")
@@ -26,14 +37,15 @@
                      :mem-usage (get s "memory_stats" "usage")}))
        list))
 
-#_(setv RUNTIME-ID "40b2cf8b1a76358d3ae6210b1050d249ca2b28cf0152afc57a97097514664a5f")
-#_(defn get-mem-usages [client]
-  [{:id "bad" #_RUNTIME-ID
-    :time "2021-07-03T14:26:23.123123"
-    :mem-usage 14876672}
-   {:id RUNTIME-ID
-    :time "2021-07-03T14:26:23.123123"
-    :mem-usage 14876672}])
+(setv RUNTIME-ID "40b2cf8b1a76358d3ae6210b1050d249ca2b28cf0152afc57a97097514664a5f")
+(defn get-mem-usages-testing [data-file client]
+  (debug "Loading test data from:" data-file)
+  (with [fp (open data-file "r")]
+    (hy.eval (hy.read fp))))
+
+(setv get-mem-usages (let [data-file (.get environ "ECS_MONITOR_DOCKER_DATAFILE")]
+                       (if data-file (partial get-mem-usages-testing data-file)
+                           get-mem-usages-real)))
 
 (defn get-task-arns [client cluster-arn &optional container-inst-arn]
   (let [pager (client.get_paginator "list_tasks")]
@@ -61,15 +73,17 @@
               :container-instance-arn (get task "containerInstanceArn")}))))
 
 (defn update-cache [cache client cluster-arn &optional container-inst-arn]
-  (print "Updating container cache...")
+  (log "Updating container cache...")
   (for [container (get-containers client cluster-arn container-inst-arn)]
-    (assoc cache (:runtime-id container) container))
-  (print "Cache size:" cache.currsize "/" cache.maxsize))
+    (let [runtime-id (:runtime-id container)]
+      (debug "Caching:" runtime-id "->\n" container "\n")
+      (assoc cache (:runtime-id container) container)))
+  (debug "Cache size:" cache.currsize "/" cache.maxsize))
 
 (defn discover-container-instance-arn [cache docker-client cluster-arn]
   (let [ecs-client (boto-client "ecs")]
     (while True
-      (print "Attempting to determine which container instance I'm running on...")
+      (log "Attempting to determine which container instance I'm running on...")
 
       (update-cache cache ecs-client cluster-arn)
       (let [ret (->> (get-mem-usages docker-client)
@@ -79,7 +93,7 @@
                      (map ':container-instance-arn)
                      first)]
         (if ret (return ret)))
-      (print "Unable to determine my container instance ID.")
+      (log "Unable to determine my container instance ID.")
       (nap))))
 
 (defn get-container-stats [cache docker-client ecs-client cluster-arn container-inst-arn &optional no-refresh]
@@ -113,18 +127,18 @@
    "Unit" "Bytes"})
 
 (defn put-metrics [client metrics]
-  #_(pp metrics)
+  (debug "Putting metric data\n" metrics)
   (.put_metric_data client :Namespace "ECS/Monitor" :MetricData metrics))
 
 (defn get-cluster-name [arn]
-  (print "Fetching name of cluster" arn)
+  (debug "Fetching name of cluster" arn)
   (let [cluster-name
         (-> (boto-client "ecs")
             (.describe_clusters :clusters [arn])
             (.get "clusters")
             first
             (.get "clusterName"))]
-    (print "cluster-name:" cluster-name)
+    (log "cluster-name:" cluster-name)
     cluster-name))
 
 (defn apply-in-chunks [chunk-size f it]
