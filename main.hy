@@ -1,5 +1,6 @@
 (require [hy.contrib.walk [let]])
-(import dateutil.parser
+(import [datetime [datetime]]
+        dateutil.parser
         [functools [partial]]
         [hy.contrib.pprint [pp pformat]]
         [os [environ]]
@@ -16,7 +17,7 @@
   (let [parts (->> args
                    (map (fn [a] (if (string? a) a (pformat a))))
                    list)]
-    (print (unpack-iterable parts))))
+    (print (datetime.strftime (datetime.now) "[%b %d, %Y %H:%M:%S]") (unpack-iterable parts))))
 
 (defn debug [&rest args]
   (when DEBUG (log #* args)))
