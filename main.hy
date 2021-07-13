@@ -67,7 +67,7 @@
 
 (defn get-containers [client cluster-arn &optional container-inst-arn]
   (for [task (get-tasks client cluster-arn container-inst-arn)]
-    (for [container (get task "containers")]
+    (for [container (get task "containers") :if (in "runtimeId" container)]
       (yield {:group (get task "group")
               :runtime-id (get container "runtimeId")
               :container-name (get container "name")
